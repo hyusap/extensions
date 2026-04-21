@@ -19,7 +19,7 @@ import {
 } from "@raycast/api";
 import { useEffect, useState } from "react";
 import { getAccounts, addAccount, removeAccount, renameAccount, Account } from "./storage";
-import { isAccountAuthorized, authorizeAccount } from "./gmail";
+import { isAccountAuthorized, authorizeAccount, evictOAuthClient, getAccountFetchError } from "./gmail";
 import { OAuthErrorView } from "./components/OAuthErrorView";
 import { Preferences } from "./types";
 
@@ -27,31 +27,38 @@ export default function ManageGoogleAccounts() {
   const preferences = getPreferenceValues<Preferences>();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [authStatuses, setAuthStatuses] = useState<Map<string, boolean>>(new Map());
+  const [fetchErrors, setFetchErrors] = useState<Map<string, string>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
-
-  // Check if OAuth Client ID is configured
-  if (!preferences.gmailClientId || preferences.gmailClientId.trim() === "") {
-    return <OAuthErrorView />;
-  }
+  const hasClientId = !!preferences.gmailClientId && preferences.gmailClientId.trim() !== "";
 
   const loadAccounts = async () => {
     setIsLoading(true);
     const loadedAccounts = await getAccounts();
     setAccounts(loadedAccounts);
 
-    // Check authorization status for each account
+    // Check authorization status and fetch errors for each account
     const statuses = new Map<string, boolean>();
+    const errors = new Map<string, string>();
     for (const account of loadedAccounts) {
       const isAuthed = await isAccountAuthorized(account.id, account.name);
       statuses.set(account.id, isAuthed);
+      const fetchError = getAccountFetchError(account.id);
+      if (fetchError) errors.set(account.id, fetchError);
     }
     setAuthStatuses(statuses);
+    setFetchErrors(errors);
     setIsLoading(false);
   };
 
+  // All hooks must run unconditionally — early return comes after
   useEffect(() => {
-    loadAccounts();
+    if (hasClientId) loadAccounts();
+    else setIsLoading(false);
   }, []);
+
+  if (!hasClientId) {
+    return <OAuthErrorView />;
+  }
 
   const handleAddAccount = async (name: string) => {
     try {
@@ -84,6 +91,7 @@ export default function ManageGoogleAccounts() {
     if (confirmed) {
       try {
         await removeAccount(account.id);
+        evictOAuthClient(account.id);
         await showToast({
           style: Toast.Style.Success,
           title: "Account Removed",
@@ -146,23 +154,31 @@ export default function ManageGoogleAccounts() {
       <List.Section title="Google Accounts">
         {accounts.map((account) => {
           const isAuthorized = authStatuses.get(account.id) || false;
+          const fetchError = fetchErrors.get(account.id);
+          const accessories = [
+            {
+              icon: isAuthorized
+                ? { source: Icon.CheckCircle, tintColor: Color.Green }
+                : { source: Icon.XMarkCircle, tintColor: Color.Red },
+              tooltip: isAuthorized ? "Authorized" : "Not Authorized",
+            },
+          ];
+          if (fetchError) {
+            accessories.push({
+              icon: { source: Icon.ExclamationMark, tintColor: Color.Yellow },
+              tooltip: `Fetch failed — re-auth may be needed: ${fetchError}`,
+            });
+          }
           return (
             <List.Item
               key={account.id}
               title={account.name}
-              subtitle={isAuthorized ? "Authorized" : "Not Authorized"}
+              subtitle={fetchError ? "Fetch error — re-auth needed" : isAuthorized ? "Authorized" : "Not Authorized"}
               icon={{
                 source: Icon.Person,
-                tintColor: isAuthorized ? Color.Green : Color.Red,
+                tintColor: fetchError ? Color.Yellow : isAuthorized ? Color.Green : Color.Red,
               }}
-              accessories={[
-                {
-                  icon: isAuthorized
-                    ? { source: Icon.CheckCircle, tintColor: Color.Green }
-                    : { source: Icon.XMarkCircle, tintColor: Color.Red },
-                  tooltip: isAuthorized ? "Authorized" : "Not Authorized",
-                },
-              ]}
+              accessories={accessories}
               actions={
                 <ActionPanel>
                   <ActionPanel.Section>

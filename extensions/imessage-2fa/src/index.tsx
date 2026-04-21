@@ -228,6 +228,9 @@ export default function Command() {
     if (preferences.enabledSources !== "imessage" && preferences.emailSource === "gmail" && !isGmailLoading) {
       revalidateGmail();
     }
+    if (preferences.emailSource === "gmail") {
+      getAccounts().then((accounts) => setGmailAccountCount(accounts.length));
+    }
   }, POLLING_INTERVAL);
 
   const handleSourceChange = useCallback((value: string) => {

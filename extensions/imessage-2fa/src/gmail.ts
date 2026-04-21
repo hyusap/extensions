@@ -15,6 +15,9 @@ import fetch from "node-fetch";
 // OAuth client cache to avoid creating multiple instances for the same account
 const oauthClients = new Map<string, OAuth.PKCEClient>();
 
+// Per-account fetch error cache — set on failure, cleared on success
+const accountFetchErrors = new Map<string, string>();
+
 /**
  * Get or create an OAuth client for a specific account
  * Each account gets its own client with a unique providerId
@@ -403,29 +406,12 @@ export async function getGmailMessages(
       );
     });
 
-    return convertedMessages.filter((msg): msg is Message => msg !== null);
+    const result = convertedMessages.filter((msg): msg is Message => msg !== null);
+    accountFetchErrors.delete(accountId);
+    return result;
   } catch (error) {
     console.error("Failed to fetch Gmail messages:", error);
     throw error;
-  }
-}
-
-/**
- * Checks if a specific Gmail account is authenticated
- */
-export async function checkGmailAuth(accountId: string, accountName: string): Promise<boolean> {
-  try {
-    const client = getOAuthClient(accountId, accountName);
-    const tokens = await client.getTokens();
-    if (!tokens?.accessToken) {
-      // Trigger authorization if no tokens
-      await authorize(accountId, accountName);
-      return true;
-    }
-    return true;
-  } catch (error) {
-    console.error(`Gmail auth check failed for account ${accountName}:`, error);
-    return false;
   }
 }
 
@@ -447,6 +433,14 @@ export async function isAccountAuthorized(accountId: string, accountName: string
  */
 export async function authorizeAccount(accountId: string, accountName: string): Promise<void> {
   await authorize(accountId, accountName);
+}
+
+export function evictOAuthClient(accountId: string): void {
+  oauthClients.delete(accountId);
+}
+
+export function getAccountFetchError(accountId: string): string | undefined {
+  return accountFetchErrors.get(accountId);
 }
 
 /**
@@ -489,6 +483,7 @@ export function useGmail(options: { searchText?: string; searchType: SearchType;
           return await getGmailMessages(account.id, account.name, options.searchType, cutoffTime);
         } catch (error) {
           console.error(`Failed to fetch Gmail messages for account ${account.name}:`, error);
+          accountFetchErrors.set(account.id, error instanceof Error ? error.message : String(error));
           // Return empty array on error so other accounts can still succeed
           return [];
         }
